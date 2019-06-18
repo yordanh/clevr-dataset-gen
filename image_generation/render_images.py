@@ -321,18 +321,69 @@ def render_scene(args,
     for i in range(3):
       bpy.data.objects['Lamp_Fill'].location[i] += rand(args.fill_light_jitter)
 
+
+
   # Now make some random objects
-  objects, blender_objects = add_random_objects(scene_struct, num_objects, args, camera)
+  objects, blender_objects = add_random_objects(scene_struct, num_objects, args, camera, scene_idx)
+
+  ### get b_box
+  box_dict = get_b_box.main(bpy.context, blender_objects)
+  for _id in box_dict:
+    objects[_id]['bbox'] = box_dict[_id]
 
   # Render the scene and dump the scene data structure
   scene_struct['objects'] = objects
   scene_struct['relationships'] = compute_all_relationships(scene_struct)
+
+
+  ############ ADDED ############
+  tree = bpy.context.scene.node_tree
+  links = tree.links
+  rl = tree.nodes['Render Layers']
+  v = tree.nodes['Viewer']
+
+  links.new(rl.outputs[0], v.inputs[0])
   while True:
     try:
       bpy.ops.render.render(write_still=True)
       break
     except Exception as e:
       print(e)
+  links.remove(links[0])
+
+  # get viewer pixels
+  rgb_pixels = bpy.data.images['Viewer Node'].pixels
+  rgb_pixels = np.array(rgb_pixels[:])
+  rgb_pixels = np.power(rgb_pixels, 1/2.2)
+  rgb_pixels[rgb_pixels > 1] = 1
+  rgb_pixels = rgb_pixels.reshape(args.height, args.width, 4)[...,:3]
+
+  # rgb_pixels = np.zeros((args.width, args.height, 3))
+
+  links.new(rl.outputs[2], v.inputs[0])
+  render_shadeless(blender_objects, lights_off=False)
+  links.remove(links[0])
+
+  # get viewer pixels
+  depth_pixels = bpy.data.images['Viewer Node'].pixels
+  depth_pixels = np.array(depth_pixels[:])
+  depth_pixels = depth_pixels.reshape(args.height, args.width, 4)[...,0, None]
+
+
+  links.new(rl.outputs[0], v.inputs[0])
+  render_shadeless(blender_objects)
+  links.remove(links[0])
+
+  # get viewer pixels
+  mask_pixels = bpy.data.images['Viewer Node'].pixels
+  mask_pixels = np.array(mask_pixels[:])
+  mask_pixels = mask_pixels.reshape(args.height, args.width, 4)[...,:3]
+
+  pixels = np.concatenate((rgb_pixels, depth_pixels, mask_pixels), axis=2)
+  pixels = np.flipud(pixels)
+
+  utils.save_arr(pixels, output_arr)  
+  ############ ADDED ############
 
   with open(output_scene, 'w') as f:
     json.dump(scene_struct, f, indent=2)
@@ -340,8 +391,7 @@ def render_scene(args,
   if output_blendfile is not None:
     bpy.ops.wm.save_as_mainfile(filepath=output_blendfile)
 
-
-def add_random_objects(scene_struct, num_objects, args, camera):
+def add_random_objects(scene_struct, num_objects, args, camera, scene_idx=0):
   """
   Add random objects to the current blender scene
   """
@@ -365,6 +415,9 @@ def add_random_objects(scene_struct, num_objects, args, camera):
   positions = []
   objects = []
   blender_objects = []
+
+  last_obj_params = []
+
   for i in range(num_objects):
     # Choose a random size
     size_name, r = random.choice(size_mapping)
@@ -381,22 +434,49 @@ def add_random_objects(scene_struct, num_objects, args, camera):
         for obj in blender_objects:
           utils.delete_object(obj)
         return add_random_objects(scene_struct, num_objects, args, camera)
-      x = random.uniform(-3, 3)
-      y = random.uniform(-3, 3)
+      
+      if np.random.rand() > 0.25 and \
+         last_obj_params != [] and \
+         ("Cube" in last_obj_params[4] or "Cylinder" in last_obj_params[4]) and \
+         last_obj_params[2] < 1:
+        
+        x = last_obj_params[0] + random.uniform(-0.3, 0.3)
+        y = last_obj_params[1] + random.uniform(-0.3, 0.3)
+        z = last_obj_params[2] + (2*last_obj_params[3])
+
+        min_dist = 0
+
+      else:
+        # x = random.uniform(-3, 3)
+        # y = random.uniform(-3, 3)
+        # z = random.uniform(0, 2)
+
+        x = random.choice(np.linspace(-2, 2, 10, endpoint=True))
+        y = random.choice(np.linspace(-2, 2, 10, endpoint=True))
+        z = random.choice(np.linspace(0, 2, 10, endpoint=True))
+
+        # x = 0
+        # y = 0
+        # z = 0
+
+        min_dist = args.min_dist
+      
       # Check to make sure the new object is further than min_dist from all
       # other objects, and further than margin along the four cardinal directions
       dists_good = True
       margins_good = True
-      for (xx, yy, rr) in positions:
-        dx, dy = x - xx, y - yy
-        dist = math.sqrt(dx * dx + dy * dy)
-        if dist - r - rr < args.min_dist:
+      for (xx, yy, zz, rr) in positions:
+        dx, dy, dz = x - xx, y - yy, z - zz
+        dist = math.sqrt(dx * dx + dy * dy + dz * dz)
+        if dist - r - rr < min_dist:
           dists_good = False
           break
-        for direction_name in ['left', 'right', 'front', 'behind']:
+        for direction_name in []:
+        # for direction_name in ['left', 'right', 'front', 'behind', 'above', 'below']:
+        # for direction_name in ['left', 'right', 'front', 'behind']:
           direction_vec = scene_struct['directions'][direction_name]
-          assert direction_vec[2] == 0
-          margin = dx * direction_vec[0] + dy * direction_vec[1]
+          # assert direction_vec[2] == 0
+          margin = dx * direction_vec[0] + dy * direction_vec[1] + dz * direction_vec[2]
           if 0 < margin < args.margin:
             print(margin, args.margin, direction_name)
             print('BROKEN MARGIN!')
@@ -423,13 +503,18 @@ def add_random_objects(scene_struct, num_objects, args, camera):
       r /= math.sqrt(2)
 
     # Choose random orientation for the object.
-    theta = 360.0 * random.random()
+    # theta = 360.0 * random.random()
+    theta = 0
 
     # Actually add the object to the scene
-    utils.add_object(args.shape_dir, obj_name, r, (x, y), theta=theta)
+    utils.add_object(args.shape_dir, obj_name, r, (x, y, z), theta=theta)
+
+    last_obj_params = [x, y, z, r, obj_name]
+
     obj = bpy.context.object
     blender_objects.append(obj)
-    positions.append((x, y, r))
+
+    positions.append((x, y, z, r))
 
     # Attach a random material
     mat_name, mat_name_out = random.choice(material_mapping)
@@ -440,6 +525,7 @@ def add_random_objects(scene_struct, num_objects, args, camera):
     objects.append({
       'shape': obj_name_out,
       'size': size_name,
+      'r' : r,
       'material': mat_name_out,
       '3d_coords': tuple(obj.location),
       'rotation': theta,

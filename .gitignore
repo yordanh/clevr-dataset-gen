@@ -4,4 +4,5 @@ __pycache__/
 *.pyc
 output/
 
-outputs/
+outputs*
+old_test*

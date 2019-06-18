@@ -6,7 +6,9 @@
 # of patent rights can be found in the PATENTS file in the same directory.
 
 import sys, random, os
+import os.path as osp
 import bpy, bpy_extras
+import numpy as np
 
 
 """
@@ -76,6 +78,7 @@ def get_camera_coords(cam, pos):
   scale = scene.render.resolution_percentage / 100.0
   w = int(scale * scene.render.resolution_x)
   h = int(scale * scene.render.resolution_y)
+
   px = int(round(x * w))
   py = int(round(h - y * h))
   return (px, py, z)
@@ -115,11 +118,11 @@ def add_object(object_dir, name, scale, loc, theta=0):
   bpy.data.objects[name].name = new_name
 
   # Set the new object as active, then rotate, scale, and translate it
-  x, y = loc
+  x, y, z = loc
   bpy.context.scene.objects.active = bpy.data.objects[new_name]
   bpy.context.object.rotation_euler[2] = theta
   bpy.ops.transform.resize(value=(scale, scale, scale))
-  bpy.ops.transform.translate(value=(x, y, scale))
+  bpy.ops.transform.translate(value=(x, y, z + scale))
 
 
 def load_materials(material_dir):

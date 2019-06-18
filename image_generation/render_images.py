@@ -534,11 +534,11 @@ def add_random_objects(scene_struct, num_objects, args, camera, scene_idx=0):
     })
 
   # Check that all objects are at least partially visible in the rendered image
-  all_visible = check_visibility(blender_objects, args.min_pixels_per_object)
+  all_visible = check_visibility(blender_objects, objects, args.min_pixels_per_object)
   if not all_visible:
     # If any of the objects are fully occluded then start over; delete all
     # objects from the scene and place them all again.
-    print('Some objects are occluded; replacing objects')
+    print('Some objects are occluded or too small; replacing objects')
     for obj in blender_objects:
       utils.delete_object(obj)
     return add_random_objects(scene_struct, num_objects, args, camera)
@@ -621,12 +621,10 @@ def compute_all_relationships(scene_struct, eps=0.5):
     all_relationships['close'].append(sorted(list(related_close)))
     all_relationships['far'].append(sorted(list(related_far)))
 
-  # print(all_relationships)
-
   return all_relationships
 
 
-def check_visibility(blender_objects, min_pixels_per_object):
+def check_visibility(blender_objects, objects, min_pixels_per_object):
   """
   Check whether all objects in the scene have some minimum number of visible
   pixels; to accomplish this we assign random (but distinct) colors to all
@@ -637,18 +635,49 @@ def check_visibility(blender_objects, min_pixels_per_object):
 
   Returns True if all objects are visible and False otherwise.
   """
-  f, path = tempfile.mkstemp(suffix='.png')
-  object_colors = render_shadeless(blender_objects, path=path)
-  img = bpy.data.images.load(path)
-  p = list(img.pixels)
-  color_count = Counter((p[i], p[i+1], p[i+2], p[i+3])
-                        for i in range(0, len(p), 4))
-  os.remove(path)
+  tree = bpy.context.scene.node_tree
+  links = tree.links
+  rl = tree.nodes['Render Layers']
+  v = tree.nodes['Viewer']
+  links.new(rl.outputs[0], v.inputs[0])
+
+  object_colors = render_shadeless(blender_objects)
+  links.remove(links[0])
+
+  # get viewer pixels
+  mask_pixels = bpy.data.images['Viewer Node'].pixels
+  p = list(mask_pixels)
+
+  color_count = Counter((p[i], p[i+1], p[i+2], p[i+3]) for i in range(0, len(p), 4))
+
+  # Some objects are fully occluded
   if len(color_count) != len(blender_objects) + 1:
     return False
+
+  # Some objects are partially occluded or too small
   for _, count in color_count.most_common():
     if count < min_pixels_per_object:
       return False
+
+  obj_pixel_vals = []
+  mask_pixels = np.array(mask_pixels[:])
+  mask_pixels = mask_pixels.reshape(args.height, args.width, 4)
+  mask_pixels = np.flipud(mask_pixels)
+  
+  for i, obj in enumerate(objects):
+    pixel_coords = obj['pixel_coords'][:2]
+    pixel_coords = [127 if x > 127 else x for x in pixel_coords]
+    pixel_coords = [0 if x < 0 else x for x in pixel_coords]
+    obj_pixel_val = mask_pixels[pixel_coords[1], pixel_coords[0]]
+    obj_pixel_val = [float('%.2f' % round(x, 2)) for x in obj_pixel_val]
+    obj_pixel_vals.append(list(obj_pixel_val))
+
+  # Some objects are partially occluded
+  # Checks whether the mask for each object is 
+  # extractable later on
+  if len(set(tuple(x) for x in obj_pixel_vals)) != len(objects):
+    return False
+    
   return True
 
 
@@ -695,7 +724,7 @@ def render_shadeless(blender_objects, path='flat.png', lights_off=True):
     obj.data.materials[0] = mat
 
   # Render the scene
-  bpy.ops.render.render(write_still=True)
+  bpy.ops.render.render(write_still=False)
 
   # Undo the above; first restore the materials to objects
   for mat, obj in zip(old_materials, blender_objects):

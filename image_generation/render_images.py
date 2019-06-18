@@ -546,7 +546,7 @@ def add_random_objects(scene_struct, num_objects, args, camera, scene_idx=0):
   return objects, blender_objects
 
 
-def compute_all_relationships(scene_struct, eps=0.2):
+def compute_all_relationships(scene_struct, eps=0.5):
   """
   Computes relationships between all pairs of objects in the scene.
   
@@ -556,8 +556,11 @@ def compute_all_relationships(scene_struct, eps=0.2):
   object j is left of object i.
   """
   all_relationships = {}
+  close_far_thresh = 3
+  above_below_xy_thresh = 0.3
+  
   for name, direction_vec in scene_struct['directions'].items():
-    if name == 'above' or name == 'below': continue
+    # if name == 'above' or name == 'below': continue
     all_relationships[name] = []
     for i, obj1 in enumerate(scene_struct['objects']):
       coords1 = obj1['3d_coords']
@@ -570,6 +573,56 @@ def compute_all_relationships(scene_struct, eps=0.2):
         if dot > eps:
           related.add(j)
       all_relationships[name].append(sorted(list(related)))
+
+  all_relationships['on'] = []
+  all_relationships['off'] = []
+  all_relationships['close'] = []
+  all_relationships['far'] = []
+
+  for i, obj1 in enumerate(scene_struct['objects']):
+    coords1 = obj1['3d_coords']
+    r1 = obj1['r']
+
+    related_on = set()
+    related_off = set()
+    related_close = set()
+    related_far = set()
+
+    for j, obj2 in enumerate(scene_struct['objects']):
+        if obj1 == obj2: continue
+        coords2 = obj2['3d_coords']
+        r2 = obj2['r']
+
+        dx = coords1[0] - coords2[0]
+        dy = coords1[1] - coords2[1]
+        dz = coords1[2] - coords2[2]
+        dist = math.sqrt(dx * dx + dy * dy + dz * dz)
+
+        # ON
+        if abs(coords1[0] - coords2[0]) < r2 and\
+           abs(coords1[1] - coords2[1]) < r2 and\
+           np.round(coords1[2], 2) == np.round(r1 + r2 + coords2[2], 2):
+           related_on.add(j)
+        # OFF
+        elif abs(coords1[0] - coords2[0]) > r2 or\
+           abs(coords1[1] - coords2[1]) > r2 or \
+           np.round(coords1[2], 2) != np.round(r1 + r2 + coords2[2], 2):
+           related_off.add(j)
+
+        # CLOSE
+        if np.round(dist, 2) < close_far_thresh :
+          related_close.add(j)
+        # FAR
+        elif np.round(dist, 2) > close_far_thresh :
+          related_far.add(j)
+    
+    all_relationships['on'].append(sorted(list(related_on)))
+    all_relationships['off'].append(sorted(list(related_off)))
+    all_relationships['close'].append(sorted(list(related_close)))
+    all_relationships['far'].append(sorted(list(related_far)))
+
+  # print(all_relationships)
+
   return all_relationships
 
 

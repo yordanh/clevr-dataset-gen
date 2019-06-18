@@ -513,7 +513,7 @@ def check_visibility(blender_objects, min_pixels_per_object):
   return True
 
 
-def render_shadeless(blender_objects, path='flat.png'):
+def render_shadeless(blender_objects, path='flat.png', lights_off=True):
   """
   Render a version of the scene with shading disabled and unique materials
   assigned to all objects, and return a set of all colors that should be in the
@@ -533,10 +533,11 @@ def render_shadeless(blender_objects, path='flat.png'):
   render_args.use_antialiasing = False
 
   # Move the lights and ground to layer 2 so they don't render
-  utils.set_layer(bpy.data.objects['Lamp_Key'], 2)
-  utils.set_layer(bpy.data.objects['Lamp_Fill'], 2)
-  utils.set_layer(bpy.data.objects['Lamp_Back'], 2)
-  utils.set_layer(bpy.data.objects['Ground'], 2)
+  if lights_off:
+    utils.set_layer(bpy.data.objects['Lamp_Key'], 2)
+    utils.set_layer(bpy.data.objects['Lamp_Fill'], 2)
+    utils.set_layer(bpy.data.objects['Lamp_Back'], 2)
+    utils.set_layer(bpy.data.objects['Ground'], 2)
 
   # Add random shadeless materials to all objects
   object_colors = set()
@@ -562,10 +563,11 @@ def render_shadeless(blender_objects, path='flat.png'):
     obj.data.materials[0] = mat
 
   # Move the lights and ground back to layer 0
-  utils.set_layer(bpy.data.objects['Lamp_Key'], 0)
-  utils.set_layer(bpy.data.objects['Lamp_Fill'], 0)
-  utils.set_layer(bpy.data.objects['Lamp_Back'], 0)
-  utils.set_layer(bpy.data.objects['Ground'], 0)
+  if lights_off:
+    utils.set_layer(bpy.data.objects['Lamp_Key'], 0)
+    utils.set_layer(bpy.data.objects['Lamp_Fill'], 0)
+    utils.set_layer(bpy.data.objects['Lamp_Back'], 0)
+    utils.set_layer(bpy.data.objects['Ground'], 0)
 
   # Set the render settings back to what they were
   render_args.filepath = old_filepath

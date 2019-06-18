@@ -42,6 +42,22 @@ def delete_object(obj):
   bpy.ops.object.delete()
 
 
+def delete_object_by_name(object_name):
+  """ Delete a specified blender object """
+  for o in bpy.data.objects:
+    if o.name == object_name:
+      o.select = True
+    else:
+      o.select = False
+  bpy.ops.object.delete()
+
+
+def save_arr(pixels, filename):
+
+  print(filename)
+  np.savez(filename, pixels)
+
+
 def get_camera_coords(cam, pos):
   """
   For a specified point, get both the 3D coordinates and 2D pixel-space

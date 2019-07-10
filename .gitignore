@@ -6,3 +6,6 @@ output/
 
 outputs*
 old_test*
+
+*.json
+*.sh

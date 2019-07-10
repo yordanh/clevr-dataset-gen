@@ -73,13 +73,13 @@ parser.add_argument('--min_objects', default=3, type=int,
     help="The minimum number of objects to place in each scene")
 parser.add_argument('--max_objects', default=10, type=int,
     help="The maximum number of objects to place in each scene")
-parser.add_argument('--min_dist', default=0.4, type=float,
+parser.add_argument('--min_dist', default=0.5, type=float,
     help="The minimum allowed distance between object centers")
-parser.add_argument('--margin', default=0.4, type=float,
+parser.add_argument('--margin', default=0.5, type=float,
     help="Along all cardinal directions (left, right, front, back), all " +
          "objects will be at least this distance apart. This makes resolving " +
          "spatial relationships slightly less ambiguous.")
-parser.add_argument('--min_pixels_per_object', default=150, type=int,
+parser.add_argument('--min_pixels_per_object', default=100, type=int,
     help="All objects will have at least this many visible pixels in the " +
          "final rendered images; this ensures that no objects are fully " +
          "occluded by other objects.")
@@ -225,7 +225,8 @@ def render_scene(args,
        'Duck' in object_name or\
        'Peg' in object_name or\
        'Disk' in object_name or\
-       'Bowl' in object_name:
+       'Bowl' in object_name or\
+       'Tray' in object_name:
        utils.delete_object_by_name(object_name)
 
   # Load the main blendfile
@@ -336,7 +337,6 @@ def render_scene(args,
   scene_struct['relationships'] = compute_all_relationships(scene_struct)
 
 
-  ############ ADDED ############
   tree = bpy.context.scene.node_tree
   links = tree.links
   rl = tree.nodes['Render Layers']
@@ -357,8 +357,6 @@ def render_scene(args,
   rgb_pixels = np.power(rgb_pixels, 1/2.2)
   rgb_pixels[rgb_pixels > 1] = 1
   rgb_pixels = rgb_pixels.reshape(args.height, args.width, 4)[...,:3]
-
-  # rgb_pixels = np.zeros((args.width, args.height, 3))
 
   links.new(rl.outputs[2], v.inputs[0])
   render_shadeless(blender_objects, lights_off=False)
@@ -382,8 +380,7 @@ def render_scene(args,
   pixels = np.concatenate((rgb_pixels, depth_pixels, mask_pixels), axis=2)
   pixels = np.flipud(pixels)
 
-  utils.save_arr(pixels, output_arr)  
-  ############ ADDED ############
+  utils.save_arr(pixels, output_arr)
 
   with open(output_scene, 'w') as f:
     json.dump(scene_struct, f, indent=2)
@@ -419,8 +416,31 @@ def add_random_objects(scene_struct, num_objects, args, camera, scene_idx=0):
   last_obj_params = []
 
   for i in range(num_objects):
-    # Choose a random size
-    size_name, r = random.choice(size_mapping)
+
+    # Choose random color and shape
+    obj_name, obj_name_out = random.choice(object_mapping)
+    
+    while i != 0 and obj_name_out == "tray":
+      obj_name, obj_name_out = random.choice(object_mapping)
+
+    if i == 0:
+      if np.random.rand() > 0.5:
+        obj_name, obj_name_out = ("Tray", "tray")
+
+
+    if obj_name_out == "tray":
+      color_name, rgba = "gray", [0.66, 0.66, 0.66, 1]
+    else:
+      color_name, rgba = random.choice(list(color_name_to_rgba.items()))
+
+    # Choose a random size 
+    if obj_name_out == "tray":
+      size_name, r = "large", 0.6
+    else:
+      size_name, r = random.choice(size_mapping)
+  
+    # Attach a random material
+    mat_name, mat_name_out = random.choice(material_mapping)
 
     # Try to place the object, ensuring that we don't intersect any existing
     # objects and that we are more than the desired margin away from all existing
@@ -435,7 +455,7 @@ def add_random_objects(scene_struct, num_objects, args, camera, scene_idx=0):
           utils.delete_object(obj)
         return add_random_objects(scene_struct, num_objects, args, camera)
       
-      if np.random.rand() > 0.25 and \
+      if np.random.rand() > 0.5 and \
          last_obj_params != [] and \
          ("Cube" in last_obj_params[4] or "Cylinder" in last_obj_params[4]) and \
          last_obj_params[2] < 1:
@@ -445,22 +465,35 @@ def add_random_objects(scene_struct, num_objects, args, camera, scene_idx=0):
         z = last_obj_params[2] + (2*last_obj_params[3])
 
         min_dist = 0
+        directions_to_check = []
+
+      elif np.random.rand() > 0 and \
+         last_obj_params != [] and \
+         ("Tray" in last_obj_params[4]):
+        
+        x = last_obj_params[0] + random.uniform(-0.3, 0.3)
+        y = last_obj_params[1] + random.uniform(-0.3, 0.3)
+        z = last_obj_params[2]
+
+        min_dist = -10
+        directions_to_check = []
 
       else:
-        # x = random.uniform(-3, 3)
-        # y = random.uniform(-3, 3)
-        # z = random.uniform(0, 2)
+        x = random.choice(np.linspace(-2, 2, 25, endpoint=True))
+        y = random.choice(np.linspace(-2, 2, 25, endpoint=True))
+        z = random.choice(np.linspace(0, 2, 25, endpoint=True))
 
-        x = random.choice(np.linspace(-2, 2, 10, endpoint=True))
-        y = random.choice(np.linspace(-2, 2, 10, endpoint=True))
-        z = random.choice(np.linspace(0, 2, 10, endpoint=True))
+        if obj_name_out == "tray":
+          z = random.choice(np.linspace(0, 1, 25, endpoint=True))
 
         # x = 0
         # y = 0
         # z = 0
 
         min_dist = args.min_dist
+        directions_to_check = [x for x in scene_struct['directions'].keys()]
       
+
       # Check to make sure the new object is further than min_dist from all
       # other objects, and further than margin along the four cardinal directions
       dists_good = True
@@ -469,17 +502,15 @@ def add_random_objects(scene_struct, num_objects, args, camera, scene_idx=0):
         dx, dy, dz = x - xx, y - yy, z - zz
         dist = math.sqrt(dx * dx + dy * dy + dz * dz)
         if dist - r - rr < min_dist:
+          # print('BROKEN DISTANCE!', dist - r - rr, min_dist)
           dists_good = False
           break
-        for direction_name in []:
-        # for direction_name in ['left', 'right', 'front', 'behind', 'above', 'below']:
-        # for direction_name in ['left', 'right', 'front', 'behind']:
+        for direction_name in directions_to_check:
           direction_vec = scene_struct['directions'][direction_name]
-          # assert direction_vec[2] == 0
           margin = dx * direction_vec[0] + dy * direction_vec[1] + dz * direction_vec[2]
           if 0 < margin < args.margin:
-            print(margin, args.margin, direction_name)
-            print('BROKEN MARGIN!')
+            # print(margin, args.margin, direction_name)
+            # print('BROKEN MARGIN!')
             margins_good = False
             break
         if not margins_good:
@@ -487,16 +518,6 @@ def add_random_objects(scene_struct, num_objects, args, camera, scene_idx=0):
 
       if dists_good and margins_good:
         break
-
-    # Choose random color and shape
-    if shape_color_combos is None:
-      obj_name, obj_name_out = random.choice(object_mapping)
-      color_name, rgba = random.choice(list(color_name_to_rgba.items()))
-    else:
-      obj_name_out, color_choices = random.choice(shape_color_combos)
-      color_name = random.choice(color_choices)
-      obj_name = [k for k, v in object_mapping if v == obj_name_out][0]
-      rgba = color_name_to_rgba[color_name]
 
     # For cube, adjust the size a bit
     if obj_name == 'Cube':
@@ -508,17 +529,15 @@ def add_random_objects(scene_struct, num_objects, args, camera, scene_idx=0):
 
     # Actually add the object to the scene
     utils.add_object(args.shape_dir, obj_name, r, (x, y, z), theta=theta)
-
     last_obj_params = [x, y, z, r, obj_name]
+
+    utils.add_material(mat_name, Color=rgba)
 
     obj = bpy.context.object
     blender_objects.append(obj)
 
+    # if obj_name_out != "tray":
     positions.append((x, y, z, r))
-
-    # Attach a random material
-    mat_name, mat_name_out = random.choice(material_mapping)
-    utils.add_material(mat_name, Color=rgba)
 
     # Record data about the object in the scene data structure
     pixel_coords = utils.get_camera_coords(camera, obj.location)
@@ -532,6 +551,9 @@ def add_random_objects(scene_struct, num_objects, args, camera, scene_idx=0):
       'pixel_coords': pixel_coords,
       'color': color_name,
     })
+
+    if obj_name_out == "tray":
+      objects[-1]["mask_color"] = [0.66, 0.66, 0.66]
 
   # Check that all objects are at least partially visible in the rendered image
   all_visible = check_visibility(blender_objects, objects, args.min_pixels_per_object)
@@ -556,7 +578,7 @@ def compute_all_relationships(scene_struct, eps=0.5):
   object j is left of object i.
   """
   all_relationships = {}
-  close_far_thresh = 3
+  close_far_thresh = 2
   above_below_xy_thresh = 0.3
   
   for name, direction_vec in scene_struct['directions'].items():
@@ -578,6 +600,8 @@ def compute_all_relationships(scene_struct, eps=0.5):
   all_relationships['off'] = []
   all_relationships['close'] = []
   all_relationships['far'] = []
+  all_relationships['in'] = []
+  all_relationships['out'] = []
 
   for i, obj1 in enumerate(scene_struct['objects']):
     coords1 = obj1['3d_coords']
@@ -587,6 +611,8 @@ def compute_all_relationships(scene_struct, eps=0.5):
     related_off = set()
     related_close = set()
     related_far = set()
+    related_in = set()
+    related_out = set()
 
     for j, obj2 in enumerate(scene_struct['objects']):
         if obj1 == obj2: continue
@@ -599,15 +625,32 @@ def compute_all_relationships(scene_struct, eps=0.5):
         dist = math.sqrt(dx * dx + dy * dy + dz * dz)
 
         # ON
-        if abs(coords1[0] - coords2[0]) < r2 and\
-           abs(coords1[1] - coords2[1]) < r2 and\
-           np.round(coords1[2], 2) == np.round(r1 + r2 + coords2[2], 2):
+        if abs(coords1[0] - coords2[0]) < r1 and\
+           abs(coords1[1] - coords2[1]) < r1 and\
+           np.round(coords2[2], 2) == np.round(r1 + r2 + coords1[2], 2) and\
+           obj1['shape'] != "tray":
            related_on.add(j)
         # OFF
-        elif abs(coords1[0] - coords2[0]) > r2 or\
-           abs(coords1[1] - coords2[1]) > r2 or \
-           np.round(coords1[2], 2) != np.round(r1 + r2 + coords2[2], 2):
+        elif (abs(coords1[0] - coords2[0]) > r1 or\
+           abs(coords1[1] - coords2[1]) > r1 or \
+           np.round(coords2[2], 2) != np.round(r1 + r2 + coords1[2], 2)) and\
+           obj1['shape'] != "tray":
            related_off.add(j)
+
+        # IN
+        if abs(coords1[0] - coords2[0]) < eps and\
+           abs(coords1[1] - coords2[1]) < eps and\
+           np.round(coords2[2], 2) == np.round(r2 + coords1[2], 2) and\
+           obj1['shape'] == "tray":
+           related_in.add(j)
+           print("IN")
+        # OUT
+        elif (abs(coords1[0] - coords2[0]) > eps or\
+           abs(coords1[1] - coords2[1]) > eps or \
+           np.round(coords2[2], 2) > np.round(r2 + coords1[2] + 0.3, 2)) and\
+           obj1['shape'] == "tray":
+           related_out.add(j)
+           print("OUT")
 
         # CLOSE
         if np.round(dist, 2) < close_far_thresh :
@@ -620,6 +663,8 @@ def compute_all_relationships(scene_struct, eps=0.5):
     all_relationships['off'].append(sorted(list(related_off)))
     all_relationships['close'].append(sorted(list(related_close)))
     all_relationships['far'].append(sorted(list(related_far)))
+    all_relationships['in'].append(sorted(list(related_in)))
+    all_relationships['out'].append(sorted(list(related_out)))
 
   return all_relationships
 
@@ -670,6 +715,10 @@ def check_visibility(blender_objects, objects, min_pixels_per_object):
     pixel_coords = [0 if x < 0 else x for x in pixel_coords]
     obj_pixel_val = mask_pixels[pixel_coords[1], pixel_coords[0]]
     obj_pixel_val = [float('%.2f' % round(x, 2)) for x in obj_pixel_val]
+
+    if obj_pixel_val == [0.66, 0.66, 0.66] and objects[i].shape != "tray":
+      return False
+
     obj_pixel_vals.append(list(obj_pixel_val))
 
   # Some objects are partially occluded
@@ -715,9 +764,13 @@ def render_shadeless(blender_objects, path='flat.png', lights_off=True):
     bpy.ops.material.new()
     mat = bpy.data.materials['Material']
     mat.name = 'Material_%d' % i
-    while True:
-      r, g, b = [random.random() for _ in range(3)]
-      if (r, g, b) not in object_colors: break
+    print(blender_objects[i].name)
+    if blender_objects[i].name == "Tray_0":
+      (r, g, b) = (0.66, 0.66, 0.66)
+    else:
+      while True:
+        r, g, b = [random.random() for _ in range(3)]
+        if (r, g, b) not in object_colors: break
     object_colors.add((r, g, b))
     mat.diffuse_color = [r, g, b]
     mat.use_shadeless = True

@@ -122,6 +122,10 @@ def add_object(object_dir, name, scale, loc, theta=0):
   bpy.context.scene.objects.active = bpy.data.objects[new_name]
   bpy.context.object.rotation_euler[2] = theta
   bpy.ops.transform.resize(value=(scale, scale, scale))
+
+  if "Tray" in name:
+    scale=0
+
   bpy.ops.transform.translate(value=(x, y, z + scale))
 
 
